@@ -25,25 +25,51 @@ SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 
 
 def datetime_convert(value):
-    """Converts a string in ISO 8601 format to a datetime-object."""
-    try:
-        return datetime.datetime.strptime(value, '%Y-%m-%dT%H:%M:%S')
-    except ValueError:
-        return value
+    """
+    Converts a string in ISO 8601 format to a datetime-object.
+    Raise ValueError if value does not match ISO 8601.
+    """
+    return datetime.datetime.strptime(value, '%Y-%m-%dT%H:%M:%S')
 
 
 def boolean_convert(value):
-    """Converts a string like '1' or '0' to a boolean value"""
-    try:
+    """
+    Converts a string like '1' or '0' to a boolean value.
+    Raise ValueError if it is something else than '1' or '0', because
+    this violates the data_type according to the AVM documentation.
+    """
+    if value == '1' or value == '0':
         return bool(int(value))
-    except ValueError:
-        # should not happen: leave value as is
-        return value
+    msg = f"value '{value}' does not match '1' or '0'."
+    raise ValueError(msg)
 
 
 def uuid_convert(value):
     """Strips the leading 'uuid:' part from the string."""
     return value.split(':')[-1]
+
+
+CONVERSION_TABLE = {
+    'datetime': datetime_convert,
+    'boolean': boolean_convert,
+    'uuid': uuid_convert,
+    'i4': int,
+    'ui1': int,
+    'ui2': int,
+    'ui4': int,
+}
+
+
+def get_converted_value(data_type, value):
+    """
+    Try to convert the value from string to the given data_type. The
+    data_type is used as key in the CONVERSION_TABLE dictionary. In case
+    the data_type is unknown, the original value is returned.
+    """
+    try:
+        return CONVERSION_TABLE[data_type](value)
+    except KeyError:
+        return value
 
 
 def encode_boolean(value):
@@ -67,6 +93,22 @@ def preprocess_arguments(arguments):
     Returns a new dictionary with the processed values.
     """
     return {k: encode_boolean(v) for k, v in arguments.items()}
+
+
+def get_argument_value(root, argument_name):
+    """
+    Takes an etree-root object, which is a parsed soap-response from the
+    Fritz!Box, and an argument_name, which corresponds to a node-name in
+    the element-tree hierarchy. Returns the text-attribute of the node
+    as a string.
+    Raise an AttributeError in case that a node is not found.
+    """
+    # root.find will() raise the AttributeError on unknown nodes
+    value = root.find(f'.//{argument_name}').text
+    if value is None:
+        # this will be the case on empty tags: <tag></tag>
+        value = ''
+    return value
 
 
 def raise_fritzconnection_error(response):
@@ -126,7 +168,7 @@ class Soaper:
         <s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"
                     xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">{body}
         </s:Envelope>
-        """)
+        """).replace('/"xmlns:', '/" xmlns:')
 
     body_template = re.sub(r'\s +', '', """
         <s:Body>
@@ -182,20 +224,22 @@ class Soaper:
         arguments = ''.join(self.argument_template.format(name=k, value=v)
                             for k, v in arguments.items())
         body = self.get_body(service, action_name, arguments)
-        envelope = self.envelope.format(body=body)
+        envelope = self.envelope.format(body=body).encode('utf-8')
         url = f'{self.address}:{self.port}{service.controlURL}'
-        auth = None
-        if self.password:
-            auth = HTTPDigestAuth(self.user, self.password)
         if self.session:
             with self.session.post(
-                url, data=envelope, headers=headers, auth=auth
+                url, data=envelope, headers=headers
             ) as response:
                 return handle_response(response)
         else:
+            if self.password:
+                auth = HTTPDigestAuth(self.user, self.password)
+            else:
+                auth = None
             response = requests.post(
                 url, data=envelope, headers=headers, auth=auth,
-                timeout=self.timeout, verify=False)
+                timeout=self.timeout, verify=False
+            )
             return handle_response(response)
 
     def parse_response(self, response, service, action_name):
@@ -210,7 +254,7 @@ class Soaper:
         root = etree.fromstring(response.content)
         for argument_name in action.arguments:
             try:
-                value = root.find(f'.//{argument_name}').text
+                value = get_argument_value(root, argument_name)
             except AttributeError:
                 continue
             state_variable_name = \
@@ -218,8 +262,9 @@ class Soaper:
             state_variable = service.state_variables[state_variable_name]
             data_type = state_variable.dataType.lower()
             try:
-                value = self.conversion_table[data_type](value)
-            except KeyError:
+                value = get_converted_value(data_type, value)
+            except ValueError:
+                # ignore malformed value and return 'as is'.
                 pass
             result[argument_name] = value
         return result

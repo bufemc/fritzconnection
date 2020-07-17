@@ -1,6 +1,15 @@
-# import shortcuts
+"""
+fritzconnection
+
+library to communicate with the AVM Fritz!Box
+via Soap and TR-064.
+
+for documentation refer:
+https://avm.de/service/schnittstellen/
+https://fritzconnection.readthedocs.io/
+"""
+
+__version__ = '1.3.3'
+
+# import shortcut
 from .core.fritzconnection import FritzConnection
-
-
-__version__ = '1.3.0'
-package_version = __version__
