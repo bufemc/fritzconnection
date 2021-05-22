@@ -9,6 +9,8 @@ Module to communicate with the AVM Fritz!Box.
 
 import os
 import string
+import xml.etree.ElementTree as ElementTree
+
 import requests
 from requests.auth import HTTPDigestAuth
 
@@ -30,10 +32,11 @@ urllib3.disable_warnings()
 FRITZ_IP_ADDRESS = "169.254.1.1"
 FRITZ_TCP_PORT = 49000
 FRITZ_TLS_PORT = 49443
-FRITZ_USERNAME = "dslf-config"
+FRITZ_USERNAME = "dslf-config"  # for Fritz!OS < 7.24
 FRITZ_IGD_DESC_FILE = "igddesc.xml"
 FRITZ_TR64_DESC_FILE = "tr64desc.xml"
 FRITZ_DESCRIPTIONS = [FRITZ_IGD_DESC_FILE, FRITZ_TR64_DESC_FILE]
+FRITZ_USERNAME_REQUIRED_VERSION = 7.24
 
 
 class FritzConnection:
@@ -55,6 +58,13 @@ class FritzConnection:
     `use_tls` accepts a boolean for using encrypted communication with
     the Fritz!Box. Default is `False`.
     (`New in version 1.2`)
+
+    For some actions the Fritz!Box needs a password and since Fritz!OS
+    7.24 also requires a username, the previous default username is just
+    valid for OS versions < 7.24. In case the username is not given and
+    the system version is 7.24 or newer, FritzConnection uses the last
+    logged in username as default.
+    (`New in version 1.5`)
     """
 
     def __init__(
@@ -133,6 +143,9 @@ class FritzConnection:
 
         self.device_manager.scan()
         self.device_manager.load_service_descriptions(address, port)
+        # set default user for FritzOS >= 7.24:
+        self._reset_user(user, password)
+
 
     def __repr__(self):
         """Return a readable representation"""
@@ -193,6 +206,40 @@ class FritzConnection:
         else:
             url = f"{http}{url}"
         return url
+
+    def _reset_user(self, user, password):
+        """
+        For Fritz!OS >= 7.24: if a password is given and the username is
+        the historic FRITZ_USERNAME, then check for the last logged-in
+        username and use this username for the soaper. Also recreate the
+        session used by the soaper and the device_manager.
+
+        This may not guarantee a valid user/password combination, but is
+        the way AVM recommends setting the required username in case a
+        username is not provided.
+        """
+        try:
+            sys_version = float(self.system_version)
+        except (ValueError, TypeError):
+            # version not available: don't do anything
+            return
+        if (sys_version >= FRITZ_USERNAME_REQUIRED_VERSION
+            and user == FRITZ_USERNAME
+            and password
+        ):
+            last_user = None
+            response = self.call_action('LANConfigSecurity1', 'X_AVM-DE_GetUserList')
+            root = ElementTree.fromstring(response['NewX_AVM-DE_UserList'])
+            for node in root:
+                if node.tag == 'Username' and node.attrib['last_user'] == '1':
+                    last_user = node.text
+                    break
+            if last_user is not None:
+                self.session.auth = HTTPDigestAuth(last_user, password)
+                self.soaper.user = last_user
+                self.soaper.session = self.session
+                self.device_manager.session = self.session
+
 
     # -------------------------------------------
     # public api:

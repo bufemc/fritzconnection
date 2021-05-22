@@ -3,6 +3,24 @@
 Version History
 ===============
 
+1.5.0
+-----
+
+- Compatibility with Fritz!OS 7.24 and newer: takes the last logged in username as default in case that a username is not provided.
+
+
+1.4.2
+-----
+
+- bugfix: byte_formatter may return wrong numbers on values < 1 and has raised math domain error on values == 0. (bug introduced with version 1.4.1) (#87)
+
+
+1.4.1
+-----
+
+- bugfix: FritzStatus library now returns a 32 bit value for *bytes_received* for older Fritz!OS versions not providing the newer 64 bit information instead of raising an exception. (bug introduced with version 1.3.0) (#82)
+- change: Output of bitrate changed to log10 based calculation (#45, #52)
+
 
 1.4.0
 -----
